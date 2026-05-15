@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, ReactNode, useEffect } from 'react';
+﻿import React, { createContext, useContext, useState, ReactNode, useEffect } from 'react';
 
 interface User {
   id: string;
@@ -16,7 +16,6 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Mock users for demo
 const mockUsers: Array<{ id: string; email: string; password: string; name: string; role: 'Admin' | 'Project Manager' | 'Staff Member' }> = [
   { id: '1', email: 'admin@council.gov', password: 'admin123', name: 'Admin User', role: 'Admin' },
   { id: '2', email: 'manager@council.gov', password: 'manager123', name: 'Sarah Johnson', role: 'Project Manager' },
@@ -26,7 +25,6 @@ const mockUsers: Array<{ id: string; email: string; password: string; name: stri
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
 
-  // Check for stored user on mount
   useEffect(() => {
     const storedUser = localStorage.getItem('councilUser');
     if (storedUser) {
@@ -35,18 +33,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = async (email: string, password: string): Promise<boolean> => {
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 500));
-    
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const userData = data.user as User;
+        setUser(userData);
+        localStorage.setItem('councilUser', JSON.stringify(userData));
+        return true;
+      }
+
+      if (response.status === 401) {
+        return false;
+      }
+    } catch {
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
     const foundUser = mockUsers.find(u => u.email === email && u.password === password);
-    
+
     if (foundUser) {
       const userData = { id: foundUser.id, name: foundUser.name, email: foundUser.email, role: foundUser.role };
       setUser(userData);
       localStorage.setItem('councilUser', JSON.stringify(userData));
       return true;
     }
-    
+
     return false;
   };
 
