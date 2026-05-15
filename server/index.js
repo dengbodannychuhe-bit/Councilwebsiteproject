@@ -1,15 +1,30 @@
-﻿import http from 'http';
+import http from 'http';
 import crypto from 'crypto';
-import { mkdir, readFile, writeFile } from 'fs/promises';
-import { existsSync } from 'fs';
+import { createReadStream, existsSync } from 'fs';
+import { mkdir, readFile, stat, writeFile } from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const projectRoot = path.resolve(__dirname, '..');
+const distDir = path.join(projectRoot, 'dist');
 const dataDir = path.join(__dirname, 'data');
 const dbPath = path.join(dataDir, 'db.json');
 const port = Number(process.env.BACKEND_PORT || process.env.PORT || 3001);
-const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+const frontendUrl = process.env.FRONTEND_URL || '';
+const mimeTypes = {
+  '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.ico': 'image/x-icon',
+  '.jfif': 'image/jpeg',
+  '.jpg': 'image/jpeg',
+  '.js': 'text/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.txt': 'text/plain; charset=utf-8',
+  '.webp': 'image/webp',
+};
 
 const seedUsers = [
   { id: '1', email: 'admin@council.gov', password: 'admin123', name: 'Admin User', role: 'Admin' },
@@ -175,6 +190,13 @@ function publicUser(user) {
   return { id: user.id, name: user.name, email: user.email, role: user.role };
 }
 
+function getFrontendUrl(request) {
+  if (frontendUrl) return frontendUrl;
+
+  const protocol = request.headers['x-forwarded-proto'] || 'http';
+  return `${protocol}://${request.headers.host}`;
+}
+
 function sendJson(response, statusCode, payload) {
   response.writeHead(statusCode, {
     'Content-Type': 'application/json',
@@ -183,6 +205,41 @@ function sendJson(response, statusCode, payload) {
     'Access-Control-Allow-Headers': 'Content-Type',
   });
   response.end(JSON.stringify(payload));
+}
+
+async function sendStaticFile(response, filePath) {
+  try {
+    const fileStat = await stat(filePath);
+
+    if (!fileStat.isFile()) return false;
+
+    const extension = path.extname(filePath).toLowerCase();
+    response.writeHead(200, {
+      'Content-Type': mimeTypes[extension] || 'application/octet-stream',
+      'Content-Length': fileStat.size,
+    });
+    createReadStream(filePath).pipe(response);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function serveFrontend(request, response, pathname) {
+  if (!existsSync(distDir)) {
+    return sendJson(response, 404, {
+      message: 'Frontend build not found. Run npm run build before starting the production server.',
+    });
+  }
+
+  const requestedPath = decodeURIComponent(pathname);
+  const safePath = path.normalize(requestedPath).replace(/^(\.\.[/\\])+/, '');
+  const staticPath = path.join(distDir, safePath === '/' ? 'index.html' : safePath);
+  const isInsideDist = path.resolve(staticPath).startsWith(path.resolve(distDir));
+
+  if (isInsideDist && await sendStaticFile(response, staticPath)) return;
+
+  await sendStaticFile(response, path.join(distDir, 'index.html'));
 }
 
 async function readBody(request) {
@@ -233,7 +290,7 @@ async function handleForgotPassword(request, response, database) {
     const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     database.passwordResetTokens = database.passwordResetTokens.filter((item) => item.userId !== user.id);
     database.passwordResetTokens.push({ token, userId: user.id, expiresAt, usedAt: null, createdAt: new Date().toISOString() });
-    resetLink = `${frontendUrl}/reset-password?token=${token}`;
+    resetLink = `${getFrontendUrl(request)}/reset-password?token=${token}`;
     console.log(`Password reset link for ${user.email}: ${resetLink}`);
     await writeDatabase(database);
   }
@@ -332,6 +389,14 @@ async function handleRequest(request, response) {
     const approvalMatch = pathname.match(/^\/api\/projects\/([^/]+)\/approval$/);
     if (approvalMatch && request.method === 'POST') return handleApproval(request, response, database, approvalMatch[1]);
 
+    if (pathname.startsWith('/api/')) {
+      return sendJson(response, 404, { message: 'Route not found' });
+    }
+
+    if (request.method === 'GET' || request.method === 'HEAD') {
+      return serveFrontend(request, response, pathname);
+    }
+
     return sendJson(response, 404, { message: 'Route not found' });
   } catch (error) {
     console.error(error);
@@ -341,5 +406,5 @@ async function handleRequest(request, response) {
 
 http.createServer(handleRequest).listen(port, () => {
   console.log(`Council P3M API running at http://localhost:${port}`);
-  console.log(`Frontend reset links use ${frontendUrl}`);
+  console.log(`Frontend reset links use ${frontendUrl || 'the current request host'}`);
 });
